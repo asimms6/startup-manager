@@ -1,0 +1,10 @@
+bin/
+obj/
+publish/
+.runtime/
+*.user
+config.json
+backup.json
+startup.log
+*-result.json
+pending-import.json
