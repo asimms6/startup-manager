@@ -9,7 +9,7 @@ $beforeConfig=Get-Content -LiteralPath $configPath -Raw
 $beforeBackup=Get-Content -LiteralPath $backupPath -Raw
 $changedRegistry=@();$changedTasks=@()
 try{
-    if([Security.Principal.WindowsIdentity]::GetCurrent().User.Value -ne $config.UserSid){throw 'Use the Simms account for this change.'}
+    if([Security.Principal.WindowsIdentity]::GetCurrent().User.Value -ne $config.UserSid){throw 'Use the account that created this configuration.'}
     if(-not(Get-ScheduledTask -TaskName 'Elgato Ordered Startup' -ErrorAction SilentlyContinue)){throw 'Install the ordered startup sequence before importing apps.'}
     $ids=Get-Content -LiteralPath (Join-Path $PSScriptRoot 'pending-import.json') -Raw | ConvertFrom-Json
     $ids=@($ids)
@@ -56,6 +56,7 @@ try{
         Register-ScheduledTask -TaskName $record.Name -TaskPath $record.Path -Xml $xml.OuterXml -Force | Out-Null
     }
     Write-StartupJson $configPath $config
+    if(@(Get-StartupConflicts ([pscustomobject]@{Registry=$changedRegistry;Tasks=$changedTasks})).Count){throw 'Imported startup entries are still enabled independently.'}
     Write-StartupJson $resultPath ([pscustomobject]@{Success=$true;Count=$selected.Count})
 }catch{
     $message=$_.Exception.Message

@@ -28,7 +28,12 @@ try{
     $result=Get-Content -LiteralPath (Join-Path $fixture 'config.json') -Raw | ConvertFrom-Json
     if($result.Apps.Count -ne 2 -or $result.Apps[0].Enabled -ne $false){throw 'Import did not preserve the existing disabled app.'}
     Write-Output 'PASS: import preserves sibling registry values and existing disabled apps.'
+    . (Join-Path $root 'scripts\StartupManager.Common.ps1')
+    $conflictBackup=Get-Content -LiteralPath (Join-Path $fixture 'backup.json') -Raw | ConvertFrom-Json
+    if(@(Get-StartupConflicts $conflictBackup).Count){throw 'Disabled managed entry should not report a conflict.'}
     Set-ItemProperty -LiteralPath $registry -Name Example -Value $enabled
+    if(@(Get-StartupConflicts $conflictBackup) -notcontains 'Example'){throw 'Re-enabled entry was not detected as a conflict.'}
+    Write-Output 'PASS: conflict detection identifies a managed entry re-enabled independently.'
     & "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File (Join-Path $fixture 'Import-StartupApps.ps1')
     if($LASTEXITCODE -ne 0){throw 'Repeated import failed.'}
     $result=Get-Content -LiteralPath (Join-Path $fixture 'config.json') -Raw | ConvertFrom-Json

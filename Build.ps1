@@ -1,4 +1,4 @@
-param([switch]$UpdateInstalled)
+param([switch]$UpdateInstalled,[switch]$Package)
 $ErrorActionPreference='Stop'
 $runtime=Join-Path $PSScriptRoot '.runtime'
 if($UpdateInstalled){
@@ -10,6 +10,16 @@ if($UpdateInstalled){
 if($LASTEXITCODE -ne 0){throw 'Build failed.'}
 if($UpdateInstalled){
     Copy-Item -Path (Join-Path $PSScriptRoot 'publish\*') -Destination (Join-Path $runtime 'manager') -Force
-    foreach($name in @('Start-OrderedApps.ps1','StartupManager.Common.ps1','Export-StartupState.ps1','Import-StartupApps.ps1','Restore-StartupOrder.ps1','Install-StartupOrder.ps1')){Copy-Item -LiteralPath (Join-Path $PSScriptRoot ('scripts\'+$name)) -Destination (Join-Path $runtime $name) -Force}
+    foreach($file in Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'scripts') -Filter '*.ps1'){Copy-Item -LiteralPath $file.FullName -Destination (Join-Path $runtime $file.Name) -Force}
     Write-Output 'Updated the installed app and scripts; configuration and backups were preserved.'
+}
+if($Package){
+    $release=Join-Path $PSScriptRoot ('release\StartupManager-'+(Get-Date -Format 'yyyyMMdd-HHmmss'))
+    New-Item -ItemType Directory -Path $release -Force | Out-Null
+    & dotnet publish (Join-Path $PSScriptRoot 'StartupManager.csproj') -c Release -r win-x64 --self-contained true -p:DebugType=None -p:DebugSymbols=false -o (Join-Path $release 'manager') --nologo
+    if($LASTEXITCODE -ne 0){throw 'Portable build failed.'}
+    Copy-Item -Path (Join-Path $PSScriptRoot 'scripts\*.ps1') -Destination $release
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'README.md') -Destination $release
+    Compress-Archive -LiteralPath $release -DestinationPath ($release+'.zip')
+    Write-Output ('Shareable package: '+$release+'.zip')
 }

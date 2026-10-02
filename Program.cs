@@ -16,18 +16,33 @@ static class Program
             catch { Environment.Exit(1); }
             return;
         }
+        // Task Scheduler starts a desktop process without an inherited packaged registry view.
+        if (!args.Contains("--desktop"))
+        {
+            try
+            {
+                var info = new ProcessStartInfo("powershell.exe") { UseShellExecute = false, CreateNoWindow = true };
+                foreach (var arg in new[] { "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", Path.Combine(ManagerForm.Runtime, "Launch-Desktop.ps1") }) info.ArgumentList.Add(arg);
+                using var process = Process.Start(info)!;
+                process.WaitForExit();
+                if (process.ExitCode != 0) throw new IOException("Could not launch the desktop helper. Check Task Scheduler access.");
+            }
+            catch (Exception ex) { MessageBox.Show(ex.Message, "Startup Manager"); }
+            return;
+        }
         Application.Run(new ManagerForm());
     }
 }
 
 sealed class ManagerForm : Form
 {
-    internal static readonly string Runtime = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "source", "repos", "StartupManager", ".runtime");
+    internal static readonly string Runtime = Directory.GetParent(AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar))!.FullName;
     static readonly string ConfigPath = Path.Combine(Runtime, "config.json");
     static readonly string PowerShell = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
     readonly DataGridView grid = MakeGrid();
     readonly Label status = new() { AutoSize = true, ForeColor = Color.FromArgb(62, 70, 83), Margin = new Padding(0, 8, 0, 0) };
     readonly Label audio = new() { AutoSize = true, Text = "Checking audio apps…", ForeColor = Color.FromArgb(62, 70, 83) };
+    readonly Label conflicts = new() { AutoSize = true, ForeColor = Color.DarkRed };
     readonly FlowLayoutPanel actions = new() { AutoSize = true, WrapContents = true, Dock = DockStyle.Fill, Margin = new Padding(0, 10, 0, 0) };
     JsonObject configuration = new();
     string loadedFile = "";
@@ -50,7 +65,9 @@ sealed class ManagerForm : Form
         priority.Controls.Add(PriorityCard("1  Stream Deck", "Wait for a responsive process + initialization time."));
         priority.Controls.Add(PriorityCard("2  Wave Link 3", "Wait for its service and fresh local server."));
         layout.Controls.Add(priority, 0, 1);
-        layout.Controls.Add(audio, 0, 2);
+        var health = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown };
+        health.Controls.Add(audio); health.Controls.Add(conflicts);
+        layout.Controls.Add(health, 0, 2);
         layout.Controls.Add(new Label { Text = "Then launch these apps — checked apps will start at sign-in.", AutoSize = true, Margin = new Padding(0, 18, 0, 8) }, 0, 3);
         grid.Columns.Add(new DataGridViewCheckBoxColumn { Name = "Enabled", HeaderText = "Start", Width = 65 });
         grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Name", HeaderText = "App", Width = 235, ReadOnly = true });
@@ -72,7 +89,10 @@ sealed class ManagerForm : Form
         layout.Controls.Add(actions, 0, 5);
         layout.Controls.Add(status, 0, 6);
         Controls.Add(layout);
-        Shown += async (_, _) => await GuardAsync(async () => { LoadConfig(); await RefreshReadiness(); });
+        Shown += async (_, _) => await GuardAsync(async () => { if (!File.Exists(ConfigPath)) await RunScript("Initialize-State.ps1"); LoadConfig(); await RefreshReadiness(); });
+        var timer = new System.Windows.Forms.Timer { Interval = 30000 };
+        timer.Tick += async (_, _) => { if (!busy && File.Exists(ConfigPath)) await GuardAsync(RefreshReadiness); };
+        timer.Start(); FormClosed += (_, _) => timer.Dispose();
         FormClosing += (_, e) => { if (busy) { e.Cancel = true; return; } if (dirty && MessageBox.Show(this, "Close without saving your changes?", "Unsaved changes", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) e.Cancel = true; };
     }
     static Control PriorityCard(string title, string description)
@@ -98,13 +118,14 @@ sealed class ManagerForm : Form
         if (name.StartsWith("28017CharlesMilette.TranslucentTB")) return "TranslucentTB";
         if (name == "LGHUB") return "Logitech G HUB";
         if (name == "RazerAppEngine") return "Razer Synapse";
-        if (name == "\\PowerToys\\Autorun for Simms") return "PowerToys";
+        if (name.StartsWith("\\PowerToys\\Autorun for ")) return "PowerToys";
         return name.TrimStart('\\');
     }
     static string Details(JsonObject obj) => S(obj, "Kind") switch { "Command" => S(obj, "FileName") + " " + S(obj, "Arguments"), "PackageApp" => S(obj, "AppId"), "Task" => S(obj, "TaskPath") + S(obj, "TaskName"), _ => "Unknown launch type" };
     internal static void ValidateConfiguration()
     {
         var config = JsonNode.Parse(File.ReadAllText(ConfigPath))!.AsObject();
+        if (S(config, "UserSid") != System.Security.Principal.WindowsIdentity.GetCurrent().User?.Value) throw new InvalidDataException("This folder contains another account's configuration. Use a fresh release ZIP for this account.");
         if (!File.Exists(S(config, "StreamDeckPath"))) throw new InvalidDataException("Stream Deck executable is missing.");
         if (config["Apps"] is not JsonArray entries) throw new InvalidDataException("Startup app list is missing.");
         foreach (var node in entries)
@@ -203,6 +224,9 @@ sealed class ManagerForm : Form
         string text = await RunScript("Export-StartupState.ps1");
         var state = JsonNode.Parse(text)!.AsObject();
         audio.Text = $"Stream Deck: {(state["StreamDeckRunning"]!.GetValue<bool>() ? "running" : "not running")}     Wave Link: {(state["WaveLinkReady"]!.GetValue<bool>() ? "ready" : "not ready")}     Service: {S(state, "Service")}     Startup task: {S(state, "Task")}";
+        var problems = state["Conflicts"]?.AsArray();
+        conflicts.ForeColor = problems?.Count > 0 ? Color.DarkRed : Color.FromArgb(62, 70, 83);
+        conflicts.Text = problems?.Count > 0 ? $"{problems.Count} independent startup conflict(s): {string.Join(", ", problems.Select(n => n!.GetValue<string>()))}. Click Install / repair sequence." : "Managed original startup entries: disabled · no conflicts detected.";
         if (!dirty) status.Text = S(state, "Task") == "Not installed" ? "The sign-in sequence is not installed. Click Install / repair sequence to enable it." : "Saved configuration · Windows runs this sequence without the manager being open.";
     }
     async Task InstallSequence()

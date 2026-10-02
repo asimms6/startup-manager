@@ -1,4 +1,6 @@
 $ErrorActionPreference = 'Stop'
+$config=Get-Content -LiteralPath (Join-Path $PSScriptRoot 'config.json') -Raw | ConvertFrom-Json
+if([Security.Principal.WindowsIdentity]::GetCurrent().User.Value -ne $config.UserSid){throw 'Restore using the account that created this configuration.'}
 $backup = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'backup.json') -Raw | ConvertFrom-Json
 foreach ($entry in $backup.Registry) {
     if ($entry.Existed) {
@@ -13,5 +15,6 @@ if ($backup.Service.FailureActionsExisted) {
     & "$env:WINDIR\System32\sc.exe" failure WavelinkSEService reset= 0 actions= '""' | Out-Null
     Remove-ItemProperty -LiteralPath 'HKLM:\SYSTEM\CurrentControlSet\Services\WavelinkSEService' -Name FailureActions -ErrorAction SilentlyContinue
 }
+if($backup.Service.PSObject.Properties['Start']){Set-ItemProperty -LiteralPath 'HKLM:\SYSTEM\CurrentControlSet\Services\WavelinkSEService' -Name Start -Type DWord -Value ([int]$backup.Service.Start)}
 Unregister-ScheduledTask -TaskName 'Elgato Ordered Startup' -Confirm:$false -ErrorAction SilentlyContinue
 Write-Output 'Original startup settings restored. Wave Link service was left running.'

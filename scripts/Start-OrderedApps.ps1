@@ -1,6 +1,8 @@
 param([switch]$CheckOnly, [switch]$PriorityOnly)
 $ErrorActionPreference = 'Stop'
 $config = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'config.json') -Raw | ConvertFrom-Json
+$waveFamily=if($config.WaveFamily){$config.WaveFamily}else{'Elgato.WaveLink_g54w8ztgkx496'}
+$waveAppId=if($config.WaveAppId){$config.WaveAppId}else{($waveFamily+'!App')}
 $logPath = Join-Path $PSScriptRoot 'startup.log'
 function Write-StartupLog([string]$Message) { Add-Content -LiteralPath $logPath -Value ('{0:o} {1}' -f (Get-Date), $Message) }
 function Get-SessionProcess([string]$Name) {
@@ -10,7 +12,7 @@ function Test-WaveReady {
     if ((Get-Service -Name WavelinkSEService).Status -ne 'Running') { return $false }
     $processes = @(Get-SessionProcess 'Elgato.WaveLink')
     if (-not $processes.Count) { return $false }
-    $infoPath = Join-Path $env:LOCALAPPDATA 'Packages\Elgato.WaveLink_g54w8ztgkx496\LocalState\ws-info.json'
+    $infoPath = Join-Path $env:LOCALAPPDATA ('Packages\'+$waveFamily+'\LocalState\ws-info.json')
     try {
         $infoFile = Get-Item -LiteralPath $infoPath
         $processStart = ($processes | Sort-Object StartTime | Select-Object -First 1).StartTime
@@ -50,7 +52,7 @@ try {
     while ((Get-Service WavelinkSEService).Status -ne 'Running' -and (Get-Date) -lt $serviceDeadline) { Start-Sleep -Seconds 2 }
     if ((Get-Service WavelinkSEService).Status -ne 'Running') { throw 'Wave Link service is stopped. Other startup apps were held.' }
     if (-not @(Get-SessionProcess 'Elgato.WaveLink').Count) {
-        Start-Process -FilePath "$env:WINDIR\explorer.exe" -ArgumentList 'shell:AppsFolder\Elgato.WaveLink_g54w8ztgkx496!App' -WindowStyle Hidden
+        Start-Process -FilePath "$env:WINDIR\explorer.exe" -ArgumentList ('shell:AppsFolder\'+$waveAppId) -WindowStyle Hidden
         Write-StartupLog 'Wave Link 3 launch requested.'
     }
     $deadline = (Get-Date).AddSeconds(90)

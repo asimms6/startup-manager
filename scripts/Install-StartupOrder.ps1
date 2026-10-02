@@ -1,10 +1,11 @@
 $ErrorActionPreference = 'Stop'
-$runtime = Join-Path $env:USERPROFILE 'source\repos\StartupManager\.runtime'
+$runtime = $PSScriptRoot
+. (Join-Path $PSScriptRoot 'StartupManager.Common.ps1')
 $taskName = 'Elgato Ordered Startup'
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 if (-not ([Security.Principal.WindowsPrincipal]$identity).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'Run this installer as administrator.' }
 $sourceConfig = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'config.json') -Raw | ConvertFrom-Json
-if ($identity.User.Value -ne $sourceConfig.UserSid) { throw 'Elevate as Simms; do not install under another administrator account.' }
+if ($identity.User.Value -ne $sourceConfig.UserSid) { throw 'Use the account that created this configuration; do not elevate under a different account.' }
 New-Item -ItemType Directory -Path $runtime -Force | Out-Null
 $statusPath = Join-Path $runtime 'install-status.json'
 try {
@@ -14,6 +15,17 @@ try {
         if(-not [IO.Path]::GetFullPath($source).Equals([IO.Path]::GetFullPath($destination),[StringComparison]::OrdinalIgnoreCase)) { Copy-Item -LiteralPath $source -Destination $destination -Force }
     }
     $backup = Get-Content -LiteralPath (Join-Path $runtime 'backup.json') -Raw | ConvertFrom-Json
+    # Capture priority autoruns on this computer; never distribute another user's backup.
+    foreach($candidate in @(Get-AvailableStartupApps -IncludePriority -IncludeDisabled)){
+        $priority=($candidate.App.Kind -eq 'Command' -and [IO.Path]::GetFileName($candidate.App.FileName) -eq 'StreamDeck.exe') -or ($candidate.SourceKind -eq 'Package' -and $candidate.App.AppId -like 'Elgato.WaveLink_*!*')
+        if(-not $priority -or @($backup.Registry | Where-Object {$_.Path -eq $candidate.SourcePath -and $_.Name -eq $candidate.SourceName}).Count){continue}
+        $key=Get-Item -LiteralPath $candidate.SourcePath -ErrorAction SilentlyContinue
+        $existed=$key -and $key.GetValueNames() -contains $candidate.SourceName
+        $type=if($candidate.SourceKind -eq 'Package'){'DWord'}else{'Binary'}
+        $value=if(-not $existed){$null}elseif($type -eq 'Binary'){[Convert]::ToBase64String($key.GetValue($candidate.SourceName))}else{$key.GetValue($candidate.SourceName)}
+        $backup.Registry=@($backup.Registry)+[pscustomobject]@{Path=$candidate.SourcePath;Name=$candidate.SourceName;Existed=[bool]$existed;Type=$type;Value=$value;Change=if($type -eq 'Binary'){'DisableRun'}else{'DisablePackage'}}
+    }
+    Write-StartupJson (Join-Path $runtime 'backup.json') $backup
     $action = New-ScheduledTaskAction -Execute "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" -Argument ('-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "' + (Join-Path $runtime 'Start-OrderedApps.ps1') + '"')
     $trigger = New-ScheduledTaskTrigger -AtLogOn -User $identity.User.Value
     $principal = New-ScheduledTaskPrincipal -UserId $identity.User.Value -LogonType Interactive -RunLevel Limited
@@ -26,6 +38,7 @@ try {
             if (-not (Test-Path -LiteralPath $entry.Path)) { New-Item -Path $entry.Path | Out-Null }
             New-ItemProperty -LiteralPath $entry.Path -Name $entry.Name -PropertyType Binary -Value $bytes -Force | Out-Null
         } elseif ($entry.Change -eq 'DisablePackage') {
+            if (-not (Test-Path -LiteralPath $entry.Path)) { New-Item -Path $entry.Path | Out-Null }
             Set-ItemProperty -LiteralPath $entry.Path -Name $entry.Name -Value 1 -Type DWord
         } elseif ($entry.Change -eq 'Preserve') {
             New-ItemProperty -LiteralPath $entry.Path -Name $entry.Name -PropertyType $entry.Type -Value ([Convert]::FromBase64String($entry.Value)) -Force | Out-Null
@@ -53,6 +66,7 @@ try {
         $expected=if($entry.Change -eq 'DisableRun'){3}elseif($entry.Change -eq 'DisablePackage'){1}else{[int]([Convert]::FromBase64String($entry.Value))[0]}
         if($actual -ne $expected){throw ('Startup verification failed: '+$entry.Name)}
     }
+    if(@(Get-StartupConflicts $backup).Count){throw 'Independent startup entries remain enabled.'}
     $shortcutPath=Join-Path ([Environment]::GetFolderPath('Programs')) 'Startup Manager.lnk'
     $shell=New-Object -ComObject WScript.Shell
     $shortcut=$shell.CreateShortcut($shortcutPath)
