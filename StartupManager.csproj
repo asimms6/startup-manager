@@ -9,4 +9,8 @@
     <AssemblyName>StartupManager</AssemblyName>
     <RootNamespace>StartupManager</RootNamespace>
   </PropertyGroup>
+  <ItemGroup>
+    <Compile Remove="Core/**/*.cs;tests/**/*.cs" />
+    <ProjectReference Include="Core/StartupManager.Core.csproj" />
+  </ItemGroup>
 </Project>

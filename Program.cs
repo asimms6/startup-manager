@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using StartupManager.Core;
 
 namespace StartupManager;
 
@@ -9,6 +10,7 @@ static class Program
     [STAThread]
     static void Main(string[] args)
     {
+        if (BackendCommands.IsCommand(args)) { Environment.ExitCode = BackendCommands.Execute(args); return; }
         ApplicationConfiguration.Initialize();
         if (args.Contains("--self-test"))
         {
@@ -21,24 +23,20 @@ static class Program
         {
             try
             {
-                var info = new ProcessStartInfo("powershell.exe") { UseShellExecute = false, CreateNoWindow = true };
-                foreach (var arg in new[] { "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", Path.Combine(ManagerForm.Runtime, "Launch-Desktop.ps1") }) info.ArgumentList.Add(arg);
-                using var process = Process.Start(info)!;
-                process.WaitForExit();
-                if (process.ExitCode != 0) throw new IOException("Could not launch the desktop helper. Check Task Scheduler access.");
+                BackendCommands.LaunchDesktop();
             }
             catch (Exception ex) { MessageBox.Show(ex.Message, "Startup Manager"); }
             return;
         }
+        try { BackendCommands.CleanupDesktopTask(); } catch (Exception ex) { Debug.WriteLine(ex.Message); }
         Application.Run(new ManagerForm());
     }
 }
 
 sealed class ManagerForm : Form
 {
-    internal static readonly string Runtime = Directory.GetParent(AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar))!.FullName;
+    internal static readonly string Runtime = AppPaths.StateDirectory;
     static readonly string ConfigPath = Path.Combine(Runtime, "config.json");
-    static readonly string PowerShell = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
     readonly DataGridView grid = MakeGrid();
     readonly Label status = new() { AutoSize = true, ForeColor = Color.FromArgb(62, 70, 83), Margin = new Padding(0, 8, 0, 0) };
     readonly Label audio = new() { AutoSize = true, Text = "Checking startup task…", ForeColor = Color.FromArgb(62, 70, 83) };
@@ -100,7 +98,7 @@ sealed class ManagerForm : Form
         layout.Controls.Add(actions, 0, 5);
         layout.Controls.Add(status, 0, 6);
         Controls.Add(layout);
-        Shown += async (_, _) => await GuardAsync(async () => { await RunScript("Initialize-State.ps1"); LoadConfig(); await RefreshReadiness(); });
+        Shown += async (_, _) => await GuardAsync(async () => { await RunBackend("--initialize"); LoadConfig(); await RefreshReadiness(); });
         var timer = new System.Windows.Forms.Timer { Interval = 30000 };
         timer.Tick += async (_, _) =>
         {
@@ -255,7 +253,8 @@ sealed class ManagerForm : Form
             if (S(entry, "Kind") is not ("Command" or "PackageApp" or "Task")) throw new InvalidDataException("Unknown launch type.");
             if (S(entry, "Kind") == "Command" && !Path.IsPathFullyQualified(S(entry, "FileName"))) throw new InvalidDataException("Executable path must be absolute.");
         }
-        foreach (var file in new[] { "Start-OrderedApps.ps1", "StartupEngine.ps1", "StartupManager.Common.ps1", "Export-StartupState.ps1", "Import-StartupApps.ps1", "Restore-StartupOrder.ps1", "backup.json" })
+        Configuration.Validate(config);
+        foreach (var file in new[] { "backup.json" })
             if (!File.Exists(Path.Combine(Runtime, file))) throw new FileNotFoundException(file);
     }
     void LoadConfig()
@@ -370,26 +369,28 @@ sealed class ManagerForm : Form
     }
     async Task RefreshReadiness()
     {
-        string text = await RunScript("Export-StartupState.ps1");
+        string text = await RunBackend("--state");
         var state = JsonNode.Parse(text)!.AsObject();
         audio.Text = $"Startup task: {S(state, "Task")}     Saved groups: {state["Groups"]}     Apps: {state["Apps"]}     Last task result: {state["LastResult"]}";
         var problems = state["Conflicts"]?.AsArray();
         conflicts.ForeColor = problems?.Count > 0 ? Color.DarkRed : Color.FromArgb(62, 70, 83);
         conflicts.Text = problems?.Count > 0 ? $"{problems.Count} independent startup conflict(s): {string.Join(", ", problems.Select(n => n!.GetValue<string>()))}. Click Install / repair sequence." : "Managed original startup entries: disabled · no conflicts detected.";
-        if (!dirty) status.Text = S(state, "Task") == "Not installed" ? "The sign-in sequence is not installed. Click Install / repair sequence to enable it." : "Saved configuration · Windows runs this sequence without the manager being open.";
+        if (!dirty) status.Text = state["NeedsRepair"]?.GetValue<bool>() == true
+            ? "The sign-in task uses the previous runner. Click Install / repair sequence to switch it to .NET."
+            : S(state, "Task") == "Not installed" ? "The sign-in sequence is not installed. Click Install / repair sequence to enable it." : "Saved configuration · Windows runs this sequence without the manager being open.";
     }
     async Task InstallSequence()
     {
         if (!SaveBeforeAction()) return;
         if (MessageBox.Show(this, "Install or repair the sign-in sequence using the saved configuration? Windows will ask for administrator access.", "Install startup sequence", MessageBoxButtons.OKCancel, MessageBoxIcon.Question) != DialogResult.OK) return;
-        await RunElevated("Install-StartupOrder.ps1"); await RefreshReadiness();
+        await RunElevated("--install"); await RefreshReadiness();
         status.Text = "Startup sequence installed. It will run at your next sign-in.";
     }
     async Task ImportApps()
     {
         if (selectedGroup == null) { MessageBox.Show(this, "Create or select a group first."); return; }
         if (!SaveBeforeAction()) return;
-        var candidates = JsonNode.Parse(await RunScript("Export-StartupState.ps1", "-Candidates"))!.AsArray();
+        var candidates = JsonNode.Parse(await RunBackend("--candidates"))!.AsArray();
         if (candidates.Count == 0) { MessageBox.Show(this, "No additional enabled desktop startup apps were found. Previously disabled apps are left alone.", "Startup entries"); return; }
         using var dialog = new Form { Text = "Import enabled startup apps", Width = 840, Height = 500, StartPosition = FormStartPosition.CenterParent, Font = Font };
         var list = new CheckedListBox { Dock = DockStyle.Fill, CheckOnClick = true, HorizontalScrollbar = true };
@@ -402,7 +403,7 @@ sealed class ManagerForm : Form
         var ids = new JsonArray(); foreach (int i in list.CheckedIndices) ids.Add(S(candidates[i]!.AsObject(), "Id"));
         File.WriteAllText(Path.Combine(Runtime, "pending-import.json"), new JsonObject { ["GroupId"] = S(selectedGroup, "Id"), ["Ids"] = ids }.ToJsonString());
         string resultPath = Path.Combine(Runtime, "import-result.json"); if (File.Exists(resultPath)) File.Delete(resultPath);
-        await RunElevated("Import-StartupApps.ps1");
+        await RunElevated("--import");
         if (!File.Exists(resultPath)) throw new IOException("The import did not complete. The current configuration was left in place.");
         var result = JsonNode.Parse(File.ReadAllText(resultPath))!.AsObject();
         if (!result["Success"]!.GetValue<bool>()) throw new IOException(S(result, "Error"));
@@ -411,21 +412,21 @@ sealed class ManagerForm : Form
     async Task Restore()
     {
         if (MessageBox.Show(this, "Restore the captured original startup settings and remove the ordered startup task? Windows will ask for administrator access.", "Restore original startup", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
-        await RunElevated("Restore-StartupOrder.ps1"); dirty = false;
+        await RunElevated("--restore"); dirty = false;
         MessageBox.Show(this, "Original startup settings restored. The custom startup task has been removed.", "Restored");
         busy = false; Close();
     }
-    static ProcessStartInfo ScriptInfo(string file, bool elevated = false)
+    static ProcessStartInfo BackendInfo(string command, bool elevated = false)
     {
-        var info = new ProcessStartInfo(PowerShell) { UseShellExecute = elevated, CreateNoWindow = !elevated, WindowStyle = ProcessWindowStyle.Hidden };
-        foreach (var arg in new[] { "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", Path.Combine(Runtime, file) }) info.ArgumentList.Add(arg);
+        var info = new ProcessStartInfo(AppPaths.Executable) { UseShellExecute = elevated, CreateNoWindow = !elevated, WindowStyle = ProcessWindowStyle.Hidden };
+        foreach (var arg in new[] { command, "--state-directory", Runtime }) info.ArgumentList.Add(arg);
         if (elevated) info.Verb = "runas";
-        else { info.RedirectStandardOutput = true; info.RedirectStandardError = true; }
+        else { info.RedirectStandardOutput = true; info.RedirectStandardError = true; info.StandardOutputEncoding = System.Text.Encoding.UTF8; info.StandardErrorEncoding = System.Text.Encoding.UTF8; }
         return info;
     }
-    static async Task<string> RunScript(string file, params string[] args)
+    static async Task<string> RunBackend(string command)
     {
-        var info = ScriptInfo(file); foreach (string arg in args) info.ArgumentList.Add(arg);
+        var info = BackendInfo(command);
         using var process = Process.Start(info) ?? throw new IOException("Could not start the startup helper.");
         var output = process.StandardOutput.ReadToEndAsync(); var errors = process.StandardError.ReadToEndAsync();
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(40));
@@ -434,10 +435,10 @@ sealed class ManagerForm : Form
         if (process.ExitCode != 0) throw new IOException(string.IsNullOrWhiteSpace(error) ? "The startup helper failed." : error);
         return text;
     }
-    static async Task RunElevated(string file)
+    static async Task RunElevated(string command)
     {
-        using var process = Process.Start(ScriptInfo(file, true)) ?? throw new IOException("Administrator access was not granted.");
-        await process.WaitForExitAsync(); if (process.ExitCode != 0) throw new IOException("The change did not complete. See the helper result or log for details.");
+        using var process = Process.Start(BackendInfo(command, true)) ?? throw new IOException("Administrator access was not granted.");
+        await process.WaitForExitAsync(); if (process.ExitCode != 0) throw new IOException("The change did not complete. See backend-error.log in " + Runtime + " for details.");
     }
     void Guard(Action action) { try { action(); } catch (Exception ex) { MessageBox.Show(this, ex.Message, "Startup Manager", MessageBoxButtons.OK, MessageBoxIcon.Error); } }
     async Task GuardAsync(Func<Task> action)

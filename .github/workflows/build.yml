@@ -17,24 +17,19 @@ jobs:
           dotnet-version: '8.0.x'
       - name: Build
         run: dotnet build StartupManager.csproj -c Release --nologo
-      - name: Test group ordering
-        shell: powershell
-        run: ./tests/Groups.Tests.ps1
-      - name: Test import controls
-        shell: powershell
-        run: ./tests/Import.Tests.ps1
-      - name: Test first run and migration
-        shell: powershell
-        run: ./tests/Migration.Tests.ps1
-      - name: Test task repair
-        shell: powershell
-        run: ./tests/Controls.Tests.ps1
+      - name: Test .NET backend
+        run: dotnet test tests/StartupManager.Tests/StartupManager.Tests.csproj -c Release --nologo
+      - name: Install installer compiler
+        run: choco install innosetup --version=6.7.3 --yes --no-progress
       - name: Package Windows x64
         shell: powershell
         run: ./Build.ps1 -Package
+      - name: Test installer lifecycle
+        shell: pwsh
+        run: ./tests/Installer.Tests.ps1 -InnoCompiler 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
       - uses: actions/upload-artifact@v7
         with:
           name: StartupManager-Windows-x64
-          path: release/*.zip
+          path: release/StartupManager-Setup.exe
           if-no-files-found: error
           compression-level: 0

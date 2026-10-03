@@ -1,26 +1,34 @@
-param([switch]$UpdateInstalled,[switch]$Package)
-$ErrorActionPreference='Stop'
-$runtime=Join-Path $PSScriptRoot '.runtime'
-if($UpdateInstalled){
-    if(-not(Test-Path -LiteralPath (Join-Path $runtime 'config.json'))){throw 'The startup sequence has not been installed on this PC.'}
-    $exe=Join-Path $runtime 'manager\StartupManager.exe'
-    if(@(Get-Process -Name StartupManager -ErrorAction SilentlyContinue | Where-Object {$_.Path -eq $exe}).Count){throw 'Close Startup Manager before updating it.'}
+param([switch]$UpdateInstalled, [switch]$Package, [string]$InnoCompiler)
+$ErrorActionPreference = 'Stop'
+$project = Join-Path $PSScriptRoot 'StartupManager.csproj'
+$publish = Join-Path $PSScriptRoot 'publish'
+$installed = Join-Path $env:LOCALAPPDATA 'Programs\StartupManager'
+if ($UpdateInstalled -and @(Get-Process -Name StartupManager -ErrorAction SilentlyContinue).Count) {
+    throw 'Close Startup Manager before updating it.'
 }
-& dotnet publish (Join-Path $PSScriptRoot 'StartupManager.csproj') -c Release --self-contained false -o (Join-Path $PSScriptRoot 'publish') --nologo
-if($LASTEXITCODE -ne 0){throw 'Build failed.'}
-if($UpdateInstalled){
-    Copy-Item -Path (Join-Path $PSScriptRoot 'publish\*') -Destination (Join-Path $runtime 'manager') -Force
-    foreach($file in Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'scripts') -Filter '*.ps1'){Copy-Item -LiteralPath $file.FullName -Destination (Join-Path $runtime $file.Name) -Force}
-    Write-Output 'Updated the installed app and scripts; configuration and backups were preserved.'
+& dotnet publish $project -c Release --self-contained false -o $publish --nologo
+if ($LASTEXITCODE -ne 0) { throw 'Build failed.' }
+if ($UpdateInstalled) {
+    if (-not (Test-Path -LiteralPath (Join-Path $installed 'StartupManager.exe'))) { throw 'Install Startup Manager first.' }
+    & dotnet publish $project -c Release -r win-x64 --self-contained true -o $publish --nologo
+    if ($LASTEXITCODE -ne 0) { throw 'Self-contained update failed.' }
+    Copy-Item -Path (Join-Path $publish '*') -Destination $installed -Force
+    Write-Output 'Updated app files. Settings and backups in LocalAppData\StartupManager\State were preserved.'
 }
-if($Package){
-    $release=Join-Path $PSScriptRoot ('release\StartupManager-'+(Get-Date -Format 'yyyyMMdd-HHmmss'))
-    New-Item -ItemType Directory -Path $release -Force | Out-Null
-    & dotnet publish (Join-Path $PSScriptRoot 'StartupManager.csproj') -c Release -r win-x64 --self-contained true -p:DebugType=None -p:DebugSymbols=false -o (Join-Path $release 'manager') --nologo
-    if($LASTEXITCODE -ne 0){throw 'Portable build failed.'}
-    Copy-Item -Path (Join-Path $PSScriptRoot 'scripts\*.ps1') -Destination $release
-    Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'README.md') -Destination $release
-    Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'config.schema.json') -Destination $release
-    Compress-Archive -LiteralPath $release -DestinationPath ($release+'.zip')
-    Write-Output ('Shareable package: '+$release+'.zip')
+if ($Package) {
+    & dotnet test (Join-Path $PSScriptRoot 'tests\StartupManager.Tests\StartupManager.Tests.csproj') -c Release --nologo
+    if ($LASTEXITCODE -ne 0) { throw 'Tests failed; no installer was created.' }
+    # A fresh staging folder prevents stale files from entering the installer.
+    $payload = Join-Path $PSScriptRoot ('release\payload-' + [guid]::NewGuid().ToString('N'))
+    & dotnet publish $project -c Release -r win-x64 --self-contained true -p:DebugType=None -p:DebugSymbols=false -o $payload --nologo
+    if ($LASTEXITCODE -ne 0) { throw 'Self-contained build failed.' }
+    if (-not $InnoCompiler) {
+        $command = Get-Command ISCC.exe -ErrorAction SilentlyContinue
+        if ($command) { $InnoCompiler = $command.Source }
+        else { $InnoCompiler = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe' }
+    }
+    if (-not (Test-Path -LiteralPath $InnoCompiler)) { throw 'Install Inno Setup 6, or pass -InnoCompiler with the path to ISCC.exe.' }
+    & $InnoCompiler /Q ('/DPayloadDir=' + $payload) ('/DOutputDir=' + (Join-Path $PSScriptRoot 'release')) (Join-Path $PSScriptRoot 'installer\StartupManager.iss')
+    if ($LASTEXITCODE -ne 0) { throw 'Installer build failed.' }
+    Write-Output ('Installer: ' + (Join-Path $PSScriptRoot 'release\StartupManager-Setup.exe'))
 }
