@@ -12,6 +12,12 @@ App files normally live in `%LOCALAPPDATA%\Programs\StartupManager`. Configurati
 
 ## Groups and readiness
 
+The dark board runs left to right. Group cards expand with the window, and the icon grid adds columns when space allows. Narrow windows scroll the sequence horizontally; each group scrolls its apps vertically. Hover an icon and open its **…** menu to enable/disable, edit, reorder, move, or remove it. App names and launch details appear in tooltips. Disabled apps and groups have dimmed icons. Keyboard users can focus an icon and press Enter or Space to open its menu.
+
+Group menus contain editing, enable/disable, reordering, and deletion. Use the **+** card to create a group and **Import** in a destination group to take over existing startup entries. **Save changes** (Ctrl+S) saves the sequence; **Sequence tools** contains install/repair, readiness checks, logs, and restore. The status bar shows sign-in, conflicts, and unsaved changes, with full diagnostics under **Details**. It offers repair when a migrated task still uses the old runner.
+
+Icons come from locally installed Windows apps, executables, and shortcuts. The board requests large icons when available and falls back to initials for unavailable icons; it does not download icons.
+
 Apps in each enabled group receive their launch requests before the engine polls readiness. The next group starts after every enabled member passes its check. Groups and apps can be disabled, reordered, edited, and removed.
 
 - **Launch accepted + delay:** Windows accepted the launch request; this does not prove that the main app opened.
@@ -28,7 +34,7 @@ For launchers such as Update.exe, enter the final application's process name or 
 
 Import discovers eligible Run registry entries, startup-folder files, packaged startup tasks, and logon tasks. Import saves their original settings, disables their independent startup, and puts the selected apps into a group. The sequence must be installed before importing.
 
-Imported entries remain visible as **Disabled** in Task Manager. The app's checked box controls whether the .NET runner launches them. Re-enabling an original entry bypasses group order. The GUI checks for conflicts at opening and every 30 seconds; **Install / repair sequence** disables managed originals again. Install also captures matching manually added apps.
+Imported entries remain visible as **Disabled** in Task Manager. Enable/disable in an app's menu controls whether the .NET runner launches it. Re-enabling an original entry bypasses group order. The GUI checks for conflicts at opening and every 30 seconds; **Install / repair sequence** disables managed originals again. Install also captures matching manually added apps.
 
 The app excludes selected security entries, Microsoft system tasks, and updater/telemetry/security task names. Review machine-wide entries before importing on a shared PC. Services, drivers, Windows-restored apps, and entries you have not captured retain ordinary behavior.
 
@@ -57,6 +63,7 @@ Development requires Windows and the .NET 8 SDK. Creating the installer also req
 ~~~powershell
 dotnet build StartupManager.csproj -c Release
 dotnet test tests/StartupManager.Tests/StartupManager.Tests.csproj -c Release
+dotnet run --project tests/UI.Smoke -c Release
 ./Build.ps1 -Package
 # If ISCC.exe is in a custom location:
 ./Build.ps1 -Package -InnoCompiler 'C:\tools\Inno Setup 6\ISCC.exe'
@@ -84,7 +91,3 @@ Tests use fake launchers and a fake clock for ordering, timeouts, stability, and
 The interfaces cover only Windows operations and time, so tests can replace them. There is no dependency injection framework, generic repository layer, or service host.
 
 Headless modes are `--initialize`, `--state`, `--candidates`, `--install`, `--import`, `--restore`, `--run`, `--uninstall`, and `--migrate-from <folder>`. `--state` and `--candidates` write JSON to standard output; failures return exit code 1 and write `backend-error.log`. `--state-directory <folder>` supports isolated test/development state. Install/import/restore require administrator access with the configured user's SID.
-
-## Merging the UI redesign
-
-This branch intentionally makes a hard cutover. The UI branch should retain its layout changes while adopting the `StartupManager.Core` project reference, `AppPaths.StateDirectory`, `BackendCommands` startup dispatch, and the new `RunBackend` / `BackendInfo` methods in `Program.cs`. Script call sites become `--initialize`, `--state`, `--candidates`, `--install`, `--import`, and `--restore`. Config schema and UI JSON fields have not changed.
