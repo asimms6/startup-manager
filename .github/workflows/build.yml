@@ -20,13 +20,24 @@ jobs:
       - name: Test .NET backend
         run: dotnet test tests/StartupManager.Tests/StartupManager.Tests.csproj -c Release --nologo
       - name: Install installer compiler
-        run: choco install innosetup --version=6.7.3 --yes --no-progress
+        shell: pwsh
+        run: |
+          $setup = Join-Path $env:RUNNER_TEMP 'innosetup-6.7.3.exe'
+          Invoke-WebRequest 'https://github.com/jrsoftware/issrc/releases/download/is-6_7_3/innosetup-6.7.3.exe' -OutFile $setup
+          $signature = Get-AuthenticodeSignature $setup
+          if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notlike '*Pyrsys B.V.*') {
+            throw 'Installer compiler signature verification failed.'
+          }
+          $compilerDirectory = Join-Path $env:RUNNER_TEMP 'Inno Setup 6'
+          $process = Start-Process $setup -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CURRENTUSER', ('/DIR="' + $compilerDirectory + '"')) -WindowStyle Hidden -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw 'Installer compiler setup failed.' }
+          "INNO_COMPILER=$compilerDirectory\ISCC.exe" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
       - name: Package Windows x64
         shell: powershell
-        run: ./Build.ps1 -Package
+        run: ./Build.ps1 -Package -InnoCompiler $env:INNO_COMPILER
       - name: Test installer lifecycle
         shell: pwsh
-        run: ./tests/Installer.Tests.ps1 -InnoCompiler 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+        run: ./tests/Installer.Tests.ps1 -InnoCompiler $env:INNO_COMPILER
       - uses: actions/upload-artifact@v7
         with:
           name: StartupManager-Windows-x64
