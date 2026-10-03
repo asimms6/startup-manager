@@ -19,6 +19,8 @@ jobs:
         run: dotnet build StartupManager.csproj -c Release --nologo
       - name: Test .NET backend
         run: dotnet test tests/StartupManager.Tests/StartupManager.Tests.csproj -c Release --nologo
+      - name: Test UI and resizing
+        run: dotnet run --project tests/UI.Smoke -c Release --nologo
       - name: Install installer compiler
         shell: pwsh
         run: |
