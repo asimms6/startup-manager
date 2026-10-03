@@ -1,90 +1,90 @@
 # Startup Manager
 
-A small Windows desktop app for organizing login apps into ordered startup groups.
+A Windows desktop app for organizing sign-in apps into ordered startup groups. The application and startup engine are .NET 8 / C#. No PowerShell runs at startup or while using the app.
 
-Create groups such as **Audio**, **Work**, and **Everything else**. Apps in each enabled group receive their launch requests before the manager waits for their readiness checks. Once every enabled app in that group passes, the next group starts.
+## Install
 
-The GUI can stay closed. Windows Task Scheduler runs a short-lived PowerShell runner at sign-in. No network access, telemetry, or background monitoring service.
+Run **StartupManager-Setup.exe**. The installer includes the .NET runtime, creates a Start menu shortcut, and registers a normal Windows uninstaller. Installation is for the current Windows account. An optional desktop shortcut is available.
 
-## Get started
+Open Startup Manager, create your groups, add apps, and save. Select **Install / repair sequence** to register the sign-in task. Windows requests administrator access under the same account when changing startup entries.
 
-1. Extract the entire Windows x64 release ZIP to a permanent writable folder. Keep the scripts beside the manager folder.
-2. Open manager/StartupManager.exe. The included .NET runtime makes the release self-contained.
-3. Create a group, give it a name, and add apps. Create more groups and move them into the order you want.
-4. Save, then select **Install / repair sequence**. Approve the administrator prompt under the same Windows account.
-5. To take over existing Windows startup entries, select a group and use **Import startup apps**. Selected entries are backed up, disabled in Windows, verified, and assigned to that group.
-6. Sign out and back in when convenient to validate your full sequence.
+App files normally live in `%LOCALAPPDATA%\Programs\StartupManager`. Configuration, recovery backups, and logs live separately in `%LOCALAPPDATA%\StartupManager\State`. Updates preserve settings. Uninstall restores captured startup entries and removes the runner before deleting the app. If restoration fails or elevation is cancelled, uninstall stops and keeps the app available for recovery. User settings and backups remain after uninstall.
 
-Setup does not require any particular app or vendor. New installations start with an empty group list.
+## Groups and readiness
 
-## Groups and apps
+Apps in each enabled group receive their launch requests before the engine polls readiness. The next group starts after every enabled member passes its check. Groups and apps can be disabled, reordered, edited, and removed.
 
-- Create, rename, enable, disable, reorder, and delete groups.
-- Add executables/shortcuts, import packaged apps and eligible logon tasks, and move apps between groups.
-- Configure app arguments, working directory, readiness check, timeout, and extra initialization delay.
-- Group failure behavior defaults to **Stop remaining groups**. Choosing **Continue** allows later groups even after a launch failure or timeout.
-- A group's optional delay starts after its apps have passed their checks.
-- Disabling or deleting an app/group removes it from ordered startup. Its original startup entry remains disabled until you restore it.
+- **Launch accepted + delay:** Windows accepted the launch request; this does not prove that the main app opened.
+- **Process is running:** the configured process exists in the current Windows session.
+- **Process is responsive:** a matching process reports that it responds.
+- **Process exits successfully:** a helper executable exits with code zero.
+- **Fresh local server port file:** a process publishes a fresh JSON file with a `port` property and that port is listening. IPv4, IPv6, and HTTP.sys listeners owned by System are supported.
 
-Launch requests are issued in list order without waiting for each app's readiness. Required service prerequisites can delay an individual launch request. Readiness checks share a polling loop; the next group waits for every enabled member. Already-running apps with process-based checks are reused.
+Readiness must remain true for the configured stable time plus extra delay. A timeout fails the group. The default failure policy holds later groups; **Continue** explicitly permits them. A group's optional delay starts after the member checks finish. A required service must already be running; the app does not install or configure services.
 
-## Readiness checks
+For launchers such as Update.exe, enter the final application's process name or use launch accepted with a delay. Process names omit `.exe`. Already-running apps with process checks are reused.
 
-| Check | What it means |
-|---|---|
-| Launch accepted + delay | Windows accepted the launch request. This does not prove that the main app opened. Useful for shortcuts, packaged apps, and launchers. |
-| Process is running | The configured process name is present in the current Windows session. |
-| Process is responsive | A matching process reports that it is responding. This is not proof that every plugin has initialized. |
-| Process exits successfully | A helper executable has finished with exit code zero. |
-| Fresh local server port file | A running process publishes a fresh JSON file containing a port property, and that port is listening. Supports HTTP.sys listeners owned by System. |
+## Existing startup entries
 
-For a launcher such as Update.exe, configure the final application's process name or choose launch accepted with a delay. Process names are entered without .exe.
+Import discovers eligible Run registry entries, startup-folder files, packaged startup tasks, and logon tasks. Import saves their original settings, disables their independent startup, and puts the selected apps into a group. The sequence must be installed before importing.
 
-Advanced fields allow a required Windows service and a JSON port file. The app waits for an existing required service; it does not install services or change their startup/recovery settings. These generic checks cannot establish audible sound or application-specific readiness beyond the signals you configure.
+Imported entries remain visible as **Disabled** in Task Manager. The app's checked box controls whether the .NET runner launches them. Re-enabling an original entry bypasses group order. The GUI checks for conflicts at opening and every 30 seconds; **Install / repair sequence** disables managed originals again. Install also captures matching manually added apps.
 
-## Existing Windows startup entries
+The app excludes selected security entries, Microsoft system tasks, and updater/telemetry/security task names. Review machine-wide entries before importing on a shared PC. Services, drivers, Windows-restored apps, and entries you have not captured retain ordinary behavior.
 
-Task Manager continues to list imported entries, with **Disabled** status. Startup Manager's checked box controls whether its own runner launches the app. Re-enabling the original entry bypasses the group order.
+Import failures restore the entries touched by that operation and restore the previous configuration. If Windows rollback fails, the saved recovery backup is retained and the error is reported. Repair edits the current task definition, preserving upgraded app actions. **Restore original startup** restores captured registry values and task XML and removes the custom sign-in task. Legacy service recovery backups are supported.
 
-The GUI checks managed entries at opening and every 30 seconds while open. If another app or Windows re-enables an original entry, the manager shows a conflict. **Install / repair sequence** disables it again. The manager does not monitor while closed or silently take over newly installed apps.
+There is no telemetry, network dependency, background monitoring service, or requirement to keep the GUI open. Task Scheduler launches `StartupManager.exe --run` at sign-in.
 
-Install/repair also detects registered startup commands matching manually added apps and captures/disables them. Import is preferable because it identifies the exact original entry and retains its registered arguments.
+## Existing installations and migration
 
-Windows services, drivers, security tray entries, Windows-restored apps, and entries you have not imported retain their ordinary behavior. Review machine-wide startup entries before importing on a shared PC. Logon task discovery excludes Microsoft system tasks and selected updater/security tasks.
+Schema version 2 is unchanged; see `config.schema.json`. Version 1 migration retains app order, disabled flags, custom arguments, readiness fields, and the original restore backup. The original config is saved as `config.v1.json`.
 
-**Restore original startup** restores captured registry values and task triggers and removes the ordered sign-in task. Restoring an older installation also supports its existing legacy service backup.
-
-## Configuration and migration
-
-Configuration, backups, and logs live beside the installed scripts. Keep the installed folder at its current path, or run Install / repair sequence after moving it.
-
-Schema version 2 stores Groups, each with a unique ID, name, enabled flag, failure policy, delay, and app array. See config.schema.json for the format.
-
-Existing version 1 installations migrate automatically to three editable groups. App order, disabled app flags, custom launch arguments, and the original restore backup are retained. The original configuration is copied to config.v1.json. Generic readiness fields retain the former audio checks without making those applications a requirement for new users.
-
-Do not send an installed folder to another person. Release ZIPs contain no user's configuration, account ID, backup, logs, or debugging symbols.
-
-The GUI first uses a temporary, non-elevated Task Scheduler launch so its desktop process does not inherit a packaged application's private registry view. The temporary task removes itself. The sign-in task is per account for new installations; legacy installations retain their existing task name during migration.
-
-## Build and test
-
-Requires Windows, the .NET 8 SDK, and Windows PowerShell 5.1. The self-contained release target is Windows x64.
+For a previous portable installation, copy its state into the new location before opening the new app:
 
 ~~~powershell
-./Build.ps1
-powershell -NoProfile -ExecutionPolicy Bypass -File tests/Import.Tests.ps1
-powershell -NoProfile -ExecutionPolicy Bypass -File tests/Groups.Tests.ps1
-powershell -NoProfile -ExecutionPolicy Bypass -File tests/Migration.Tests.ps1
-powershell -NoProfile -ExecutionPolicy Bypass -File tests/Controls.Tests.ps1
-./Build.ps1 -Package
+& "$env:LOCALAPPDATA\Programs\StartupManager\StartupManager.exe" --migrate-from 'C:\path\to\old\folder'
 ~~~
 
--Package creates a fresh self-contained ZIP under release. It copies only the published app, scripts, schema, and README. -UpdateInstalled updates this development checkout's .runtime while preserving local configuration and backups; close the app first.
+Supply the folder containing `config.json` and `backup.json`, not its `manager` subfolder. Migration refuses another account's state and refuses to overwrite existing settings. An executable still placed in an old `manager` folder also recognizes its adjacent legacy state on first initialization. After migration, use **Install / repair sequence** to replace the old PowerShell scheduled action with the .NET runner. Keep the old folder until repair succeeds.
 
-The GitHub Actions workflow builds, tests, and produces the Windows ZIP as a workflow artifact. Source code has no machine-specific configuration. The desktop executable is unsigned.
+Do not distribute your state folder: it contains account-specific configuration and recovery backups. Installer payloads include only published binaries, schema, and documentation.
 
-Program.cs contains the group editor. scripts/StartupEngine.ps1 implements launches and group barriers. StartupManager.Common.ps1 handles startup discovery, validation, conflicts, and registry/task control. The remaining scripts initialize/migrate, import, install, run, launch the desktop GUI, and restore.
+## Build, test, and package
 
-Tests cover group barriers, timeouts, failure policies, disabled groups/apps, preservation of sibling registry values, re-import without duplicates, stale selections, and migration without personal prerequisites. They use mocked launch functions and isolated registry/folder fixtures.
+Development requires Windows and the .NET 8 SDK. Creating the installer also requires [Inno Setup 6](https://jrsoftware.org/isinfo.php).
 
+~~~powershell
+dotnet build StartupManager.csproj -c Release
+dotnet test tests/StartupManager.Tests/StartupManager.Tests.csproj -c Release
+./Build.ps1 -Package
+# If ISCC.exe is in a custom location:
+./Build.ps1 -Package -InnoCompiler 'C:\tools\Inno Setup 6\ISCC.exe'
+~~~
 
+`-Package` runs the tests, publishes self-contained Windows x64 binaries, and creates `release/StartupManager-Setup.exe`. `-UpdateInstalled` updates the default installed app files without changing user state; close the app first. `Build.ps1` is a development helper only and is not shipped. CI runs the same .NET tests and uploads the installer. The executable and installer are currently unsigned.
+
+Tests use fake launchers and a fake clock for ordering, timeouts, stability, and failure policy. Fake Windows operations cover import, re-import, account validation, rollback, install, restore, and migration. Windows integration tests use isolated temporary registry keys, an unstarted temporary scheduled task, and a local TCP listener. They do not change real startup entries or launch user apps.
+
+`tests/Installer.Tests.ps1` runs under PowerShell 7 and creates an isolated installer with a unique product ID, shortcut, install folder, state folder, and task name. It checks installation, upgrades, failed recovery blocking uninstall, successful uninstall, and preservation of settings. CI runs it after packaging.
+
+## Code layout
+
+- `Program.cs`: existing WinForms editor. It calls headless modes of its own executable, elevating only startup changes.
+- `Core/Configuration.cs`: JSON validation and version 1 migration.
+- `Core/StartupEngine.cs`: launch groups, poll readiness, handle timeouts and group barriers.
+- `Core/StartupService.cs`: settings files, backups, import/install/restore transactions, and sequence logging.
+- `Core/WindowsSystem.cs`: registry/startup discovery and app readiness using Windows APIs.
+- `Core/WindowsTasks.cs`: Task Scheduler COM API and task XML changes.
+- `Core/NativeMethods.cs`: small native API bindings for packages, services, and port ownership.
+- `Core/BackendCommands.cs`: headless command dispatch, user data paths, and desktop launch.
+- `tests/StartupManager.Tests`: xUnit tests.
+- `installer/StartupManager.iss`: installer and uninstall recovery hook.
+
+The interfaces cover only Windows operations and time, so tests can replace them. There is no dependency injection framework, generic repository layer, or service host.
+
+Headless modes are `--initialize`, `--state`, `--candidates`, `--install`, `--import`, `--restore`, `--run`, `--uninstall`, and `--migrate-from <folder>`. `--state` and `--candidates` write JSON to standard output; failures return exit code 1 and write `backend-error.log`. `--state-directory <folder>` supports isolated test/development state. Install/import/restore require administrator access with the configured user's SID.
+
+## Merging the UI redesign
+
+This branch intentionally makes a hard cutover. The UI branch should retain its layout changes while adopting the `StartupManager.Core` project reference, `AppPaths.StateDirectory`, `BackendCommands` startup dispatch, and the new `RunBackend` / `BackendInfo` methods in `Program.cs`. Script call sites become `--initialize`, `--state`, `--candidates`, `--install`, `--import`, and `--restore`. Config schema and UI JSON fields have not changed.

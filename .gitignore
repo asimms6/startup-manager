@@ -11,3 +11,5 @@ startup.log
 pending-import.json
 release/
 *.zip
+.tools/
+TestResults/
