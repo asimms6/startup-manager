@@ -1,0 +1,238 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Startup Manager configuration",
+  "type": "object",
+  "required": [
+    "SchemaVersion",
+    "UserSid",
+    "TaskName",
+    "Groups"
+  ],
+  "properties": {
+    "SchemaVersion": {
+      "const": 2
+    },
+    "UserSid": {
+      "type": "string",
+      "minLength": 1
+    },
+    "TaskName": {
+      "type": "string",
+      "minLength": 1
+    },
+    "Groups": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/group"
+      }
+    }
+  },
+  "$defs": {
+    "group": {
+      "type": "object",
+      "required": [
+        "Id",
+        "Name",
+        "Enabled",
+        "OnFailure",
+        "Apps"
+      ],
+      "properties": {
+        "Id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "Name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "Enabled": {
+          "type": "boolean"
+        },
+        "OnFailure": {
+          "enum": [
+            "Stop",
+            "Continue"
+          ]
+        },
+        "DelayAfterSeconds": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 3600,
+          "default": 0
+        },
+        "Apps": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/app"
+          }
+        }
+      }
+    },
+    "app": {
+      "type": "object",
+      "required": [
+        "Name",
+        "Kind",
+        "Enabled"
+      ],
+      "properties": {
+        "Name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "Kind": {
+          "enum": [
+            "Command",
+            "PackageApp",
+            "Task"
+          ]
+        },
+        "Enabled": {
+          "type": "boolean"
+        },
+        "FileName": {
+          "type": "string"
+        },
+        "Arguments": {
+          "type": "string"
+        },
+        "WorkingDirectory": {
+          "type": "string"
+        },
+        "AppId": {
+          "type": "string"
+        },
+        "TaskName": {
+          "type": "string"
+        },
+        "TaskPath": {
+          "type": "string"
+        },
+        "SourceId": {
+          "type": "string"
+        },
+        "WaitMode": {
+          "enum": [
+            "Launch",
+            "Process",
+            "Responsive",
+            "Exit",
+            "PortFile"
+          ],
+          "default": "Launch"
+        },
+        "ProcessName": {
+          "type": "string"
+        },
+        "ServiceName": {
+          "type": "string"
+        },
+        "PortFile": {
+          "type": "string"
+        },
+        "TimeoutSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3600,
+          "default": 60
+        },
+        "StableSeconds": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 3600,
+          "default": 0
+        },
+        "DelaySeconds": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 3600,
+          "default": 0
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "Kind": {
+                "const": "Command"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "FileName"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "Kind": {
+                "const": "PackageApp"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "AppId"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "Kind": {
+                "const": "Task"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "TaskName",
+              "TaskPath"
+            ]
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "WaitMode"
+            ],
+            "properties": {
+              "WaitMode": {
+                "enum": [
+                  "Process",
+                  "Responsive",
+                  "PortFile"
+                ]
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "ProcessName"
+            ]
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "WaitMode"
+            ],
+            "properties": {
+              "WaitMode": {
+                "const": "PortFile"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "PortFile"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

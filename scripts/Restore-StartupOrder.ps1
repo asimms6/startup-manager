@@ -9,6 +9,7 @@ foreach ($entry in $backup.Registry) {
     } else { Remove-ItemProperty -LiteralPath $entry.Path -Name $entry.Name -ErrorAction SilentlyContinue }
 }
 foreach ($task in $backup.Tasks) { Register-ScheduledTask -TaskName $task.Name -TaskPath $task.Path -Xml $task.Xml -Force | Out-Null }
+if($backup.Service){
 if ($backup.Service.FailureActionsExisted) {
     New-ItemProperty -LiteralPath 'HKLM:\SYSTEM\CurrentControlSet\Services\WavelinkSEService' -Name FailureActions -PropertyType Binary -Value ([Convert]::FromBase64String($backup.Service.FailureActions)) -Force | Out-Null
 } else {
@@ -16,5 +17,6 @@ if ($backup.Service.FailureActionsExisted) {
     Remove-ItemProperty -LiteralPath 'HKLM:\SYSTEM\CurrentControlSet\Services\WavelinkSEService' -Name FailureActions -ErrorAction SilentlyContinue
 }
 if($backup.Service.PSObject.Properties['Start']){Set-ItemProperty -LiteralPath 'HKLM:\SYSTEM\CurrentControlSet\Services\WavelinkSEService' -Name Start -Type DWord -Value ([int]$backup.Service.Start)}
-Unregister-ScheduledTask -TaskName 'Elgato Ordered Startup' -Confirm:$false -ErrorAction SilentlyContinue
-Write-Output 'Original startup settings restored. Wave Link service was left running.'
+}
+Unregister-ScheduledTask -TaskName $config.TaskName -Confirm:$false -ErrorAction SilentlyContinue
+Write-Output 'Original startup settings restored. The ordered startup task was removed.'

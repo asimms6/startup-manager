@@ -1,50 +1,90 @@
 # Startup Manager
 
-A local Windows app that launches Stream Deck first, Wave Link 3 second, and selected startup apps afterward. Windows Task Scheduler runs the sequence without the GUI remaining open. No network access, telemetry, or cloud account.
+A small Windows desktop app for organizing login apps into ordered startup groups.
 
-## Share and set up
+Create groups such as **Audio**, **Work**, and **Everything else**. Apps in each enabled group receive their launch requests before the manager waits for their readiness checks. Once every enabled app in that group passes, the next group starts.
 
-Send the release ZIP, not your installed folder. The Windows x64 release includes its .NET runtime. It contains no user's configuration, account ID, startup backup, or logs.
+The GUI can stay closed. Windows Task Scheduler runs a short-lived PowerShell runner at sign-in. No network access, telemetry, or background monitoring service.
 
-1. Extract the entire ZIP to a permanent writable folder. Keep the scripts next to the `manager` folder.
-2. Open `manager\StartupManager.exe`. It starts a normal desktop process through a temporary Task Scheduler launch, avoiding inherited packaged-app registry redirection.
-3. First run detects the current user's Stream Deck installation and Wave Link 3 package. Both must already be installed; older Wave Link versions are not supported by this release. Nothing is disabled during detection.
-4. Click **Install / repair sequence**. Approve Windows' administrator prompt using the same account. Setup captures and disables the original audio-app startup entries and creates the sign-in task.
-5. Click **Import startup apps**, select the other apps you want to defer, and import. Each import backs up its original startup entry, disables independent startup, verifies the change, and adds the app to the ordered list. Previously disabled apps are excluded.
-6. Sign out and back in when convenient to check the full sign-in sequence.
+## Get started
 
-Keep this folder at its installed location. If you move it, open the app from the new folder and run Install / repair sequence. There should be one installed copy per Windows account. Windows may show an unsigned-app warning; this personal build is not code-signed.
+1. Extract the entire Windows x64 release ZIP to a permanent writable folder. Keep the scripts beside the manager folder.
+2. Open manager/StartupManager.exe. The included .NET runtime makes the release self-contained.
+3. Create a group, give it a name, and add apps. Create more groups and move them into the order you want.
+4. Save, then select **Install / repair sequence**. Approve the administrator prompt under the same Windows account.
+5. To take over existing Windows startup entries, select a group and use **Import startup apps**. Selected entries are backed up, disabled in Windows, verified, and assigned to that group.
+6. Sign out and back in when convenient to validate your full sequence.
 
-## Maintain
+Setup does not require any particular app or vendor. New installations start with an empty group list.
 
-- Check or uncheck an app, reorder it, then **Save changes**. Checked means the ordered runner will launch it.
-- Original entries remain listed in Task Manager, with **Disabled** status. Leave them disabled; enabling them there bypasses the order. Task Manager may need to be closed and reopened after changes.
-- The app checks managed startup entries when opened and every 30 seconds while open. It shows conflicts when an original entry has been re-enabled. **Install / repair sequence** disables those entries again and verifies them. It does not continuously watch while closed.
-- **Import startup apps** also discovers newly enabled entries. New apps are not taken over silently.
-- **Add app** adds a manual launch; use Import when an independent startup entry already exists.
-- **Edit** changes executable name, path, arguments, and working directory.
-- **Check readiness** reports Stream Deck, Wave Link's service/server, the sign-in task, and conflicting independent startup entries.
-- **View log** opens `startup.log`.
-- **Restore original startup** restores captured registry values, logon task triggers, and Wave Link service recovery settings, then removes the ordered task. It leaves the service running. Administrator access is required.
+## Groups and apps
 
-## What is checked
+- Create, rename, enable, disable, reorder, and delete groups.
+- Add executables/shortcuts, import packaged apps and eligible logon tasks, and move apps between groups.
+- Configure app arguments, working directory, readiness check, timeout, and extra initialization delay.
+- Group failure behavior defaults to **Stop remaining groups**. Choosing **Continue** allows later groups even after a launch failure or timeout.
+- A group's optional delay starts after its apps have passed their checks.
+- Disabling or deleting an app/group removes it from ordered startup. Its original startup entry remains disabled until you restore it.
 
-Stream Deck must remain responsive for five seconds, followed by an initialization grace period. Wave Link's enabler service must be running and its current process must publish a fresh listening local server. If either check fails, the controlled apps are held and an error is logged. These checks do not prove audible speaker output or completion of every Stream Deck plugin.
+Launch requests are issued in list order without waiting for each app's readiness. Required service prerequisites can delay an individual launch request. Readiness checks share a polling loop; the next group waits for every enabled member. Already-running apps with process-based checks are reused.
 
-Windows services, drivers, security components, Windows-restored apps, and entries you have not imported retain their normal startup behavior. Discovery excludes security tray entries and selected updater/system tasks. Machine-wide startup entries can affect other users; review those before importing on a shared PC.
+## Readiness checks
 
-## Source and build
+| Check | What it means |
+|---|---|
+| Launch accepted + delay | Windows accepted the launch request. This does not prove that the main app opened. Useful for shortcuts, packaged apps, and launchers. |
+| Process is running | The configured process name is present in the current Windows session. |
+| Process is responsive | A matching process reports that it is responding. This is not proof that every plugin has initialized. |
+| Process exits successfully | A helper executable has finished with exit code zero. |
+| Fresh local server port file | A running process publishes a fresh JSON file containing a port property, and that port is listening. Supports HTTP.sys listeners owned by System. |
 
-Built with .NET 8 Windows Forms and Windows PowerShell. Windows x64 is the release target; first-run setup requires Stream Deck and Wave Link 3.
+For a launcher such as Update.exe, configure the final application's process name or choose launch accepted with a delay. Process names are entered without .exe.
 
-```powershell
+Advanced fields allow a required Windows service and a JSON port file. The app waits for an existing required service; it does not install services or change their startup/recovery settings. These generic checks cannot establish audible sound or application-specific readiness beyond the signals you configure.
+
+## Existing Windows startup entries
+
+Task Manager continues to list imported entries, with **Disabled** status. Startup Manager's checked box controls whether its own runner launches the app. Re-enabling the original entry bypasses the group order.
+
+The GUI checks managed entries at opening and every 30 seconds while open. If another app or Windows re-enables an original entry, the manager shows a conflict. **Install / repair sequence** disables it again. The manager does not monitor while closed or silently take over newly installed apps.
+
+Install/repair also detects registered startup commands matching manually added apps and captures/disables them. Import is preferable because it identifies the exact original entry and retains its registered arguments.
+
+Windows services, drivers, security tray entries, Windows-restored apps, and entries you have not imported retain their ordinary behavior. Review machine-wide startup entries before importing on a shared PC. Logon task discovery excludes Microsoft system tasks and selected updater/security tasks.
+
+**Restore original startup** restores captured registry values and task triggers and removes the ordered sign-in task. Restoring an older installation also supports its existing legacy service backup.
+
+## Configuration and migration
+
+Configuration, backups, and logs live beside the installed scripts. Keep the installed folder at its current path, or run Install / repair sequence after moving it.
+
+Schema version 2 stores Groups, each with a unique ID, name, enabled flag, failure policy, delay, and app array. See config.schema.json for the format.
+
+Existing version 1 installations migrate automatically to three editable groups. App order, disabled app flags, custom launch arguments, and the original restore backup are retained. The original configuration is copied to config.v1.json. Generic readiness fields retain the former audio checks without making those applications a requirement for new users.
+
+Do not send an installed folder to another person. Release ZIPs contain no user's configuration, account ID, backup, logs, or debugging symbols.
+
+The GUI first uses a temporary, non-elevated Task Scheduler launch so its desktop process does not inherit a packaged application's private registry view. The temporary task removes itself. The sign-in task is per account for new installations; legacy installations retain their existing task name during migration.
+
+## Build and test
+
+Requires Windows, the .NET 8 SDK, and Windows PowerShell 5.1. The self-contained release target is Windows x64.
+
+~~~powershell
 ./Build.ps1
-powershell -NoProfile -ExecutionPolicy Bypass -File tests\Import.Tests.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/Import.Tests.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/Groups.Tests.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/Migration.Tests.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/Controls.Tests.ps1
 ./Build.ps1 -Package
-```
+~~~
 
-`-Package` creates a fresh self-contained Windows x64 ZIP under `release`, copying only build files and scripts. It never copies `.runtime`, configuration, or backups. On the development PC, close the installed app and run `./Build.ps1 -UpdateInstalled` to preserve configuration and backups while replacing the app/scripts.
+-Package creates a fresh self-contained ZIP under release. It copies only the published app, scripts, schema, and README. -UpdateInstalled updates this development checkout's .runtime while preserving local configuration and backups; close the app first.
 
-`Program.cs` contains the GUI. `scripts` contains detection, installation, registry/task control, desktop launch, startup ordering, and restoration. Configuration and undo records live beside the installed scripts. They are per-user data and must not be shipped to another person.
+The GitHub Actions workflow builds, tests, and produces the Windows ZIP as a workflow artifact. Source code has no machine-specific configuration. The desktop executable is unsigned.
 
-Registry changes set individual values; never recreate existing StartupApproved keys with New-Item -Force, which can erase sibling values. Tests cover preservation, re-import, stale selections, and conflict detection.
+Program.cs contains the group editor. scripts/StartupEngine.ps1 implements launches and group barriers. StartupManager.Common.ps1 handles startup discovery, validation, conflicts, and registry/task control. The remaining scripts initialize/migrate, import, install, run, launch the desktop GUI, and restore.
+
+Tests cover group barriers, timeouts, failure policies, disabled groups/apps, preservation of sibling registry values, re-import without duplicates, stale selections, and migration without personal prerequisites. They use mocked launch functions and isolated registry/folder fixtures.
+
+

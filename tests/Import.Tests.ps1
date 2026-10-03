@@ -14,19 +14,19 @@ try{
     $enabled=New-Object byte[] 12;$enabled[0]=2
     New-ItemProperty -LiteralPath $registry -Name OtherDisabled -PropertyType Binary -Value $disabled | Out-Null
     New-ItemProperty -LiteralPath $registry -Name Example -PropertyType Binary -Value $enabled | Out-Null
-    $config=[pscustomobject]@{UserSid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value;Apps=@([pscustomobject]@{Name='Already off';Kind='Command';Enabled=$false;FileName='C:\example.exe';Arguments=''})}
+    $config=[pscustomobject]@{SchemaVersion=2;TaskName='Elgato Ordered Startup';UserSid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value;Groups=@([pscustomobject]@{Id='group';Name='Example group';Enabled=$true;OnFailure='Stop';Apps=@([pscustomobject]@{Name='Already off';Kind='Command';Enabled=$false;FileName='C:\example.exe';Arguments=''})})}
     $backup=[pscustomobject]@{Registry=@();Tasks=@()}
     $candidate=[pscustomobject]@{Id=($registry+'|Example');Name='Example';SourceKind='Registry';SourcePath=$registry;SourceName='Example';App=[pscustomobject]@{Name='Example';Kind='Command';FileName='C:\example.exe';Arguments='';WorkingDirectory='C:\'}}
     $config | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $fixture 'config.json')
     $backup | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $fixture 'backup.json')
     ConvertTo-Json -InputObject @($candidate) -Depth 6 | Set-Content -LiteralPath (Join-Path $fixture 'available.json')
-    ConvertTo-Json -InputObject @($candidate.Id) | Set-Content -LiteralPath (Join-Path $fixture 'pending-import.json')
+    [pscustomobject]@{GroupId='group';Ids=@($candidate.Id)} | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $fixture 'pending-import.json')
     & "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File (Join-Path $fixture 'Import-StartupApps.ps1')
     if($LASTEXITCODE -ne 0){Get-Content -LiteralPath (Join-Path $fixture 'import-result.json') -ErrorAction SilentlyContinue | Write-Output;throw 'First import failed.'}
     $key=Get-Item -LiteralPath $registry
     if($key.GetValue('OtherDisabled')[0] -ne 3 -or $key.GetValue('Example')[0] -ne 3){throw 'Import changed another value or did not disable the selected entry.'}
     $result=Get-Content -LiteralPath (Join-Path $fixture 'config.json') -Raw | ConvertFrom-Json
-    if($result.Apps.Count -ne 2 -or $result.Apps[0].Enabled -ne $false){throw 'Import did not preserve the existing disabled app.'}
+    if($result.Groups[0].Apps.Count -ne 2 -or $result.Groups[0].Apps[0].Enabled -ne $false){throw 'Import did not preserve the existing disabled app.'}
     Write-Output 'PASS: import preserves sibling registry values and existing disabled apps.'
     . (Join-Path $root 'scripts\StartupManager.Common.ps1')
     $conflictBackup=Get-Content -LiteralPath (Join-Path $fixture 'backup.json') -Raw | ConvertFrom-Json
@@ -38,10 +38,21 @@ try{
     if($LASTEXITCODE -ne 0){throw 'Repeated import failed.'}
     $result=Get-Content -LiteralPath (Join-Path $fixture 'config.json') -Raw | ConvertFrom-Json
     $savedBackup=Get-Content -LiteralPath (Join-Path $fixture 'backup.json') -Raw | ConvertFrom-Json
-    if($result.Apps.Count -ne 2 -or $savedBackup.Registry.Count -ne 1 -or [Convert]::FromBase64String($savedBackup.Registry[0].Value)[0] -ne 2){throw 'Duplicate import or original backup corruption.'}
+    if($result.Groups[0].Apps.Count -ne 2 -or $savedBackup.Registry.Count -ne 1 -or [Convert]::FromBase64String($savedBackup.Registry[0].Value)[0] -ne 2){throw 'Duplicate import or original backup corruption.'}
     Write-Output 'PASS: re-import does not duplicate apps or overwrite the original backup.'
+    $result.Groups[0].Apps[1].WaitMode='Responsive'
+    $result.Groups[0].Apps[1] | Add-Member -NotePropertyName ProcessName -NotePropertyValue 'example' -Force
+    $result.Groups=@($result.Groups)+[pscustomobject]@{Id='second';Name='Second group';Enabled=$true;OnFailure='Stop';Apps=@()}
+    $result | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $fixture 'config.json')
+    Set-ItemProperty -LiteralPath $registry -Name Example -Value $enabled
+    [pscustomobject]@{GroupId='second';Ids=@($candidate.Id)} | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $fixture 'pending-import.json')
+    & "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File (Join-Path $fixture 'Import-StartupApps.ps1')
+    if($LASTEXITCODE -ne 0){throw 'Moving re-imported app to another group failed.'}
+    $result=Get-Content -LiteralPath (Join-Path $fixture 'config.json') -Raw | ConvertFrom-Json
+    if($result.Groups[0].Apps.Count -ne 1 -or $result.Groups[1].Apps.Count -ne 1 -or $result.Groups[1].Apps[0].WaitMode -ne 'Responsive'){throw 'Group import duplicated the app or lost its readiness settings.'}
+    Write-Output 'PASS: moving a re-imported app between groups keeps readiness and avoids duplicates.'
     $before=Get-Content -LiteralPath (Join-Path $fixture 'config.json') -Raw
-    ConvertTo-Json -InputObject @('missing') | Set-Content -LiteralPath (Join-Path $fixture 'pending-import.json')
+    [pscustomobject]@{GroupId='group';Ids=@('missing')} | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $fixture 'pending-import.json')
     & "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File (Join-Path $fixture 'Import-StartupApps.ps1')
     if($LASTEXITCODE -eq 0){throw 'Stale import should fail.'}
     $after=Get-Content -LiteralPath (Join-Path $fixture 'config.json') -Raw

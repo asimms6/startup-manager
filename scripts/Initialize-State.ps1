@@ -1,18 +1,26 @@
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'StartupManager.Common.ps1')
-if(Test-Path -LiteralPath (Join-Path $PSScriptRoot 'config.json')){exit}
-$streamPath=Join-Path $env:ProgramFiles 'Elgato\StreamDeck\StreamDeck.exe'
-foreach($candidate in @(Get-AvailableStartupApps -IncludePriority -IncludeDisabled)){
-    if($candidate.App.Kind -eq 'Command' -and [IO.Path]::GetFileName($candidate.App.FileName) -eq 'StreamDeck.exe'){$streamPath=$candidate.App.FileName}
+$configPath=Join-Path $PSScriptRoot 'config.json'
+if(Test-Path -LiteralPath $configPath){
+    $existing=Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
+    if($existing.UserSid -ne [Security.Principal.WindowsIdentity]::GetCurrent().User.Value){throw 'Use a fresh release folder; this configuration belongs to another account.'}
+    if($existing.SchemaVersion -eq 2){Test-StartupConfiguration $existing;exit}
+    Copy-Item -LiteralPath $configPath -Destination (Join-Path $PSScriptRoot 'config.v1.json') -Force
+    $stream=[pscustomobject]@{Name='Stream Deck';Kind='Command';FileName=$existing.StreamDeckPath;Arguments='--runinbk';WorkingDirectory=(Split-Path -Parent $existing.StreamDeckPath);Enabled=$true;WaitMode='Responsive';ProcessName='StreamDeck';TimeoutSeconds=60;StableSeconds=5;DelaySeconds=3}
+    $family=if($existing.WaveFamily){$existing.WaveFamily}else{'Elgato.WaveLink_g54w8ztgkx496'}
+    $waveId=if($existing.WaveAppId){$existing.WaveAppId}else{($family+'!App')}
+    $wave=[pscustomobject]@{Name='Wave Link';Kind='PackageApp';AppId=$waveId;Enabled=$true;WaitMode='PortFile';ProcessName='Elgato.WaveLink';ServiceName='WavelinkSEService';PortFile=('%LOCALAPPDATA%\Packages\'+$family+'\LocalState\ws-info.json');TimeoutSeconds=90;StableSeconds=6;DelaySeconds=3}
+    $groups=@(
+        [pscustomobject]@{Id=[guid]::NewGuid().ToString('N');Name='Stream Deck';Enabled=$true;OnFailure='Stop';DelayAfterSeconds=0;Apps=@($stream)},
+        [pscustomobject]@{Id=[guid]::NewGuid().ToString('N');Name='Wave Link';Enabled=$true;OnFailure='Stop';DelayAfterSeconds=0;Apps=@($wave)},
+        [pscustomobject]@{Id=[guid]::NewGuid().ToString('N');Name='Other apps';Enabled=$true;OnFailure='Continue';DelayAfterSeconds=0;Apps=@($existing.Apps)}
+    )
+    $config=[pscustomobject]@{SchemaVersion=2;UserSid=$existing.UserSid;TaskName='Elgato Ordered Startup';Groups=$groups}
+}else{
+    $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    $config=[pscustomobject]@{SchemaVersion=2;UserSid=$sid;TaskName=('Startup Manager - '+$sid);Groups=@()}
+    Write-StartupJson (Join-Path $PSScriptRoot 'backup.json') ([pscustomobject]@{Registry=@();Tasks=@()})
 }
-if(-not(Test-Path -LiteralPath $streamPath)){throw 'Install Stream Deck before setting up Startup Manager.'}
-$wave=Get-AppxPackage -Name Elgato.WaveLink | Select-Object -First 1
-if(-not $wave -or -not(Get-Service WavelinkSEService -ErrorAction SilentlyContinue)){throw 'This release requires Wave Link 3 and its Windows service. Install Wave Link 3 first.'}
-[xml]$manifest=Get-Content -LiteralPath (Join-Path $wave.InstallLocation 'AppxManifest.xml')
-$application=@($manifest.Package.Applications.Application)[0]
-$config=[pscustomobject]@{UserSid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value;StreamDeckPath=$streamPath;WaveFamily=$wave.PackageFamilyName;WaveAppId=($wave.PackageFamilyName+'!'+$application.Id);Apps=@()}
-$serviceKey=Get-Item -LiteralPath 'HKLM:\SYSTEM\CurrentControlSet\Services\WavelinkSEService'
-$failure=$serviceKey.GetValue('FailureActions')
-$backup=[pscustomobject]@{Registry=@();Tasks=@();Service=[pscustomobject]@{FailureActionsExisted=($null -ne $failure);FailureActions=if($failure){[Convert]::ToBase64String($failure)}else{$null};Start=$serviceKey.GetValue('Start')}}
-Write-StartupJson (Join-Path $PSScriptRoot 'backup.json') $backup
-Write-StartupJson (Join-Path $PSScriptRoot 'config.json') $config
+Test-StartupConfiguration $config
+Write-StartupJson $configPath $config
+

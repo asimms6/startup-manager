@@ -20,6 +20,7 @@ if($Package){
     if($LASTEXITCODE -ne 0){throw 'Portable build failed.'}
     Copy-Item -Path (Join-Path $PSScriptRoot 'scripts\*.ps1') -Destination $release
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'README.md') -Destination $release
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'config.schema.json') -Destination $release
     Compress-Archive -LiteralPath $release -DestinationPath ($release+'.zip')
     Write-Output ('Shareable package: '+$release+'.zip')
 }

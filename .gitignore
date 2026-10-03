@@ -4,8 +4,10 @@ publish/
 .runtime/
 *.user
 config.json
+config.v1.json
 backup.json
 startup.log
 *-result.json
 pending-import.json
 release/
+*.zip

@@ -1,0 +1,40 @@
+name: Windows build
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '8.0.x'
+      - name: Build
+        run: dotnet build StartupManager.csproj -c Release --nologo
+      - name: Test group ordering
+        shell: powershell
+        run: ./tests/Groups.Tests.ps1
+      - name: Test import controls
+        shell: powershell
+        run: ./tests/Import.Tests.ps1
+      - name: Test first run and migration
+        shell: powershell
+        run: ./tests/Migration.Tests.ps1
+      - name: Test task repair
+        shell: powershell
+        run: ./tests/Controls.Tests.ps1
+      - name: Package Windows x64
+        shell: powershell
+        run: ./Build.ps1 -Package
+      - uses: actions/upload-artifact@v7
+        with:
+          name: StartupManager-Windows-x64
+          path: release/*.zip
+          if-no-files-found: error
+          compression-level: 0

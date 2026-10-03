@@ -10,9 +10,13 @@ $beforeBackup=Get-Content -LiteralPath $backupPath -Raw
 $changedRegistry=@();$changedTasks=@()
 try{
     if([Security.Principal.WindowsIdentity]::GetCurrent().User.Value -ne $config.UserSid){throw 'Use the account that created this configuration.'}
-    if(-not(Get-ScheduledTask -TaskName 'Elgato Ordered Startup' -ErrorAction SilentlyContinue)){throw 'Install the ordered startup sequence before importing apps.'}
-    $ids=Get-Content -LiteralPath (Join-Path $PSScriptRoot 'pending-import.json') -Raw | ConvertFrom-Json
-    $ids=@($ids)
+    Test-StartupConfiguration $config
+    if(-not(Get-ScheduledTask -TaskName $config.TaskName -ErrorAction SilentlyContinue)){throw 'Install the ordered startup sequence before importing apps.'}
+    $request=Get-Content -LiteralPath (Join-Path $PSScriptRoot 'pending-import.json') -Raw | ConvertFrom-Json
+    $group=@($config.Groups | Where-Object {$_.Id -eq $request.GroupId})
+    if($group.Count -ne 1){throw 'Choose an existing startup group.'}
+    $targetGroup=$group[0]
+    $ids=@($request.Ids)
     $available=@(Get-AvailableStartupApps)
     $selected=@($available | Where-Object {$_.Id -in $ids})
     if($selected.Count -ne $ids.Count){throw 'Startup settings changed since the list was opened. Refresh the list and try again.'}
@@ -35,9 +39,27 @@ try{
         $app | Add-Member -NotePropertyName SourceId -NotePropertyValue $candidate.Id -Force
         $app | Add-Member -NotePropertyName Enabled -NotePropertyValue $true -Force
         # Replace re-enabled entries already controlled by this manager, without duplicating them.
-        $existing=@($config.Apps | Where-Object {$_.SourceId -eq $candidate.Id -or $_.Name -eq $candidate.Name})
-        if($existing.Count){$config.Apps=@($config.Apps | Where-Object {$_.SourceId -ne $candidate.Id -and $_.Name -ne $candidate.Name})}
-        $config.Apps=@($config.Apps)+$app
+        foreach($sourceGroup in $config.Groups){
+            $existing=@($sourceGroup.Apps | Where-Object {$_.SourceId -eq $candidate.Id})
+            if($existing.Count){
+                foreach($field in 'WaitMode','ProcessName','ServiceName','PortFile','TimeoutSeconds','StableSeconds','DelaySeconds'){
+                    if($existing[0].PSObject.Properties[$field]){$app | Add-Member -NotePropertyName $field -NotePropertyValue $existing[0].$field -Force}
+                }
+                $sourceGroup.Apps=@($sourceGroup.Apps | Where-Object {$_.SourceId -ne $candidate.Id})
+            }
+        }
+        if(-not $app.PSObject.Properties['WaitMode']){
+            $mode='Launch';$processName=$null
+            if($app.Kind -eq 'Command' -and [IO.Path]::GetExtension($app.FileName) -eq '.exe'){
+                $mode='Process';$processName=[IO.Path]::GetFileNameWithoutExtension($app.FileName)
+                if($app.Arguments -match '--processStart\s+"?([^"\s]+\.exe)'){$processName=[IO.Path]::GetFileNameWithoutExtension($matches[1])}
+                elseif($app.Arguments -match '--checkInstall'){$mode='Launch';$processName=$null}
+            }
+            $app | Add-Member -NotePropertyName WaitMode -NotePropertyValue $mode
+            if($processName){$app | Add-Member -NotePropertyName ProcessName -NotePropertyValue $processName}
+            $app | Add-Member -NotePropertyName DelaySeconds -NotePropertyValue 2
+        }
+        $targetGroup.Apps=@($targetGroup.Apps)+$app
     }
     Write-StartupJson $backupPath $backup
     foreach($record in $changedRegistry){
@@ -55,6 +77,7 @@ try{
         }
         Register-ScheduledTask -TaskName $record.Name -TaskPath $record.Path -Xml $xml.OuterXml -Force | Out-Null
     }
+    Test-StartupConfiguration $config
     Write-StartupJson $configPath $config
     if(@(Get-StartupConflicts ([pscustomobject]@{Registry=$changedRegistry;Tasks=$changedTasks})).Count){throw 'Imported startup entries are still enabled independently.'}
     Write-StartupJson $resultPath ([pscustomobject]@{Success=$true;Count=$selected.Count})
